@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 
 #define PORT 5555
 #define BUF_SIZE 1024
@@ -49,10 +50,12 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
 }
 
 int main() {
-    int server_fd, client_fd;
+    int server_fd;
     struct sockaddr_in address;
     char buffer[BUF_SIZE];
     Inventory inv = {0};
+    fd_set master_set, read_fds;
+    int fdmax;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
@@ -69,33 +72,54 @@ int main() {
         exit(1);
     }
 
-    listen(server_fd, 1);
+    listen(server_fd, SOMAXCONN);
     printf("Atom warehouse server listening on port %d...\n", PORT);
 
-    socklen_t addrlen = sizeof(address);
-    client_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-    if (client_fd < 0) {
-        perror("accept");
-        exit(1);
-    }
+    FD_ZERO(&master_set);
+    FD_SET(server_fd, &master_set);
+    fdmax = server_fd;
 
     while (1) {
-        memset(buffer, 0, BUF_SIZE);
-        ssize_t len = recv(client_fd, buffer, BUF_SIZE - 1, 0);
-        if (len <= 0) break;
+        read_fds = master_set;
+        if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+            perror("select");
+            exit(1);
+        }
 
-        char cmd[16], atom[16];
-        unsigned long long amount;
-
-        if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
-            update_inventory(client_fd, &inv, atom, amount);
-        } else {
-            char* err = "Invalid command. Use: ADD ATOM_NAME AMOUNT\n";
-            send(client_fd, err, strlen(err), 0);
+        for (int i = 0; i <= fdmax; ++i) {
+            if (FD_ISSET(i, &read_fds)) {
+                if (i == server_fd) {
+                    socklen_t addrlen = sizeof(address);
+                    int new_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+                    if (new_fd == -1) {
+                        perror("accept");
+                    } else {
+                        FD_SET(new_fd, &master_set);
+                        if (new_fd > fdmax) fdmax = new_fd;
+                        printf("New client connected.\n");
+                    }
+                } else {
+                    memset(buffer, 0, BUF_SIZE);
+                    ssize_t len = recv(i, buffer, BUF_SIZE - 1, 0);
+                    if (len <= 0) {
+                        close(i);
+                        FD_CLR(i, &master_set);
+                        printf("Client disconnected.\n");
+                    } else {
+                        char cmd[16], atom[16];
+                        unsigned long long amount;
+                        if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
+                            update_inventory(i, &inv, atom, amount);
+                        } else {
+                            char* err = "Invalid command. Use: ADD ATOM_NAME AMOUNT\n";
+                            send(i, err, strlen(err), 0);
+                        }
+                    }
+                }
+            }
         }
     }
 
-    close(client_fd);
     close(server_fd);
     return 0;
 }
