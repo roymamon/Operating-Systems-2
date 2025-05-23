@@ -8,23 +8,42 @@
 
 #define PORT 5555
 #define BUF_SIZE 1024
+#define MAX_ATOMS 1000000000000000000ULL  // 10^18
 
 typedef struct {
-    int carbon;
-    int hydrogen;
-    int oxygen;
+    unsigned long long carbon;
+    unsigned long long hydrogen;
+    unsigned long long oxygen;
 } Inventory;
 
-void update_inventory(Inventory* inv, const char* atom, int amount) {
-    if (strcmp(atom, "CARBON") == 0) inv->carbon += amount;
-    else if (strcmp(atom, "HYDROGEN") == 0) inv->hydrogen += amount;
-    else if (strcmp(atom, "OXYGEN") == 0) inv->oxygen += amount;
-}
-
-void print_inventory(int client_fd, Inventory* inv) {
+void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned long long amount) {
     char msg[BUF_SIZE];
+
+    if (strcmp(atom, "CARBON") == 0) {
+        if (inv->carbon + amount > MAX_ATOMS) {
+            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+            send(client_fd, msg, strlen(msg), 0);
+            return;
+        }
+        inv->carbon += amount;
+    } else if (strcmp(atom, "HYDROGEN") == 0) {
+        if (inv->hydrogen + amount > MAX_ATOMS) {
+            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+            send(client_fd, msg, strlen(msg), 0);
+            return;
+        }
+        inv->hydrogen += amount;
+    } else if (strcmp(atom, "OXYGEN") == 0) {
+        if (inv->oxygen + amount > MAX_ATOMS) {
+            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+            send(client_fd, msg, strlen(msg), 0);
+            return;
+        }
+        inv->oxygen += amount;
+    }
+
     snprintf(msg, sizeof(msg),
-             "Inventory: CARBON=%d, HYDROGEN=%d, OXYGEN=%d\n",
+             "Inventory: CARBON=%llu, HYDROGEN=%llu, OXYGEN=%llu\n",
              inv->carbon, inv->hydrogen, inv->oxygen);
     send(client_fd, msg, strlen(msg), 0);
 }
@@ -66,11 +85,10 @@ int main() {
         if (len <= 0) break;
 
         char cmd[16], atom[16];
-        int amount;
+        unsigned long long amount;
 
-        if (sscanf(buffer, "%s %s %d", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
-            update_inventory(&inv, atom, amount);
-            print_inventory(client_fd, &inv);
+        if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
+            update_inventory(client_fd, &inv, atom, amount);
         } else {
             char* err = "Invalid command. Use: ADD ATOM_NAME AMOUNT\n";
             send(client_fd, err, strlen(err), 0);
