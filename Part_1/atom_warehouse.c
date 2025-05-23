@@ -21,22 +21,22 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
     char msg[BUF_SIZE];
 
     if (strcmp(atom, "CARBON") == 0) {
-        if (inv->carbon + amount > MAX_ATOMS) {
-            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+        if (amount > MAX_ATOMS - inv->carbon) {
+            snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
         }
         inv->carbon += amount;
     } else if (strcmp(atom, "HYDROGEN") == 0) {
-        if (inv->hydrogen + amount > MAX_ATOMS) {
-            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+        if (amount > MAX_ATOMS - inv->hydrogen) {
+            snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
         }
         inv->hydrogen += amount;
     } else if (strcmp(atom, "OXYGEN") == 0) {
-        if (inv->oxygen + amount > MAX_ATOMS) {
-            snprintf(msg, sizeof(msg), "Error: exceeding storage limit.\n");
+        if (amount > MAX_ATOMS - inv->oxygen) {
+            snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
         }
@@ -44,7 +44,7 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
     }
 
     snprintf(msg, sizeof(msg),
-             "Inventory: CARBON=%llu, HYDROGEN=%llu, OXYGEN=%llu\n",
+             "inventory: CARBON=%llu, HYDROGEN=%llu, OXYGEN=%llu\n",
              inv->carbon, inv->hydrogen, inv->oxygen);
     send(client_fd, msg, strlen(msg), 0);
 }
@@ -73,7 +73,7 @@ int main() {
     }
 
     listen(server_fd, SOMAXCONN);
-    printf("Atom warehouse server listening on port %d...\n", PORT);
+    printf("atom warehouse server listening on port %d\n", PORT);
 
     FD_ZERO(&master_set);
     FD_SET(server_fd, &master_set);
@@ -96,7 +96,7 @@ int main() {
                     } else {
                         FD_SET(new_fd, &master_set);
                         if (new_fd > fdmax) fdmax = new_fd;
-                        printf("New client connected.\n");
+                        printf("new client connected.\n");
                     }
                 } else {
                     memset(buffer, 0, BUF_SIZE);
@@ -104,14 +104,14 @@ int main() {
                     if (len <= 0) {
                         close(i);
                         FD_CLR(i, &master_set);
-                        printf("Client disconnected.\n");
+                        printf("client disconnected.\n");
                     } else {
                         char cmd[16], atom[16];
                         unsigned long long amount;
                         if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
                             update_inventory(i, &inv, atom, amount);
                         } else {
-                            char* err = "Invalid command. Use: ADD ATOM_NAME AMOUNT\n";
+                            char* err = "invalid command. Use: ADD ATOM_NAME AMOUNT\n";
                             send(i, err, strlen(err), 0);
                         }
                     }

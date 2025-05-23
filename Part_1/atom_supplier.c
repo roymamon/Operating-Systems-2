@@ -35,12 +35,12 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("Connected to atom warehouse.\n");
+    printf("connected to atom warehouse.\n");
 
-    printf("Enter command (e.g. ADD OXYGEN 5): ");
+    printf("enter command (example: ADD OXYGEN 5), or -1 to quit: ");
     while (fgets(buffer, sizeof(buffer), stdin)) {
         if (strcmp(buffer, "-1\n") == 0) {
-            printf("Exiting...\n");
+            printf("exiting\n");
             break;
         }
 
@@ -48,10 +48,10 @@ int main(int argc, char *argv[]) {
 
         memset(buffer, 0, BUF_SIZE);
         recv(sockfd, buffer, BUF_SIZE - 1, 0);
-        printf("Server: %s", buffer);
+        printf("server: %s", buffer);
 
         if (!feof(stdin)) {
-        printf("Enter command (e.g. ADD OXYGEN 5): ");
+        printf("enter command (example: ADD OXYGEN 5), or -1 to quit: ");
     }
     }
 
