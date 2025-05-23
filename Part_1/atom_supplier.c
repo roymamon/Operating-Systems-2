@@ -50,7 +50,9 @@ int main(int argc, char *argv[]) {
         recv(sockfd, buffer, BUF_SIZE - 1, 0);
         printf("Server: %s", buffer);
 
+        if (!feof(stdin)) {
         printf("Enter command (e.g. ADD OXYGEN 5): ");
+    }
     }
 
     close(sockfd);
