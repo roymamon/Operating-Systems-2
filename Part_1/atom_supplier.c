@@ -5,10 +5,17 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define PORT 5555
 #define BUF_SIZE 1024
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <server_ip> <port>\n", argv[0]);
+        exit(1);
+    }
+
+    const char *server_ip = argv[1];
+    int port = atoi(argv[2]);
+
     int sockfd;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
@@ -20,8 +27,8 @@ int main() {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = inet_addr(server_ip);
 
     if (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("connect");
@@ -32,9 +39,7 @@ int main() {
 
     printf("Enter command (e.g. ADD OXYGEN 5): ");
     while (fgets(buffer, sizeof(buffer), stdin)) {
-        buffer[strcspn(buffer, "\n")] = 0;  // Remove trailing newline
-
-        if (strcmp(buffer, "-1") == 0) {
+        if (strcmp(buffer, "-1\n") == 0) {
             printf("Exiting...\n");
             break;
         }
@@ -43,7 +48,7 @@ int main() {
 
         memset(buffer, 0, BUF_SIZE);
         recv(sockfd, buffer, BUF_SIZE - 1, 0);
-        printf("Server: %s", buffer);  
+        printf("Server: %s", buffer);
 
         printf("Enter command (e.g. ADD OXYGEN 5): ");
     }
