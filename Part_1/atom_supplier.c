@@ -30,15 +30,22 @@ int main() {
 
     printf("Connected to atom warehouse.\n");
 
-    while (fgets(buffer, sizeof(buffer), stdin)) {
     printf("Enter command (e.g. ADD OXYGEN 5): ");
+    while (fgets(buffer, sizeof(buffer), stdin)) {
+        buffer[strcspn(buffer, "\n")] = 0;  // Remove trailing newline
 
-    buffer[strcspn(buffer, "\n")] = 0;
+        if (strcmp(buffer, "-1") == 0) {
+            printf("Exiting...\n");
+            break;
+        }
+
         send(sockfd, buffer, strlen(buffer), 0);
 
         memset(buffer, 0, BUF_SIZE);
         recv(sockfd, buffer, BUF_SIZE - 1, 0);
-        printf("Server: %s", buffer);
+        printf("Server: %s", buffer);  
+
+        printf("Enter command (e.g. ADD OXYGEN 5): ");
     }
 
     close(sockfd);
