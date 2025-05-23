@@ -30,9 +30,10 @@ int main() {
 
     printf("Connected to atom warehouse.\n");
 
-    while (1) {
-        printf("Enter command (e.g. ADD OXYGEN 5): ");
-        if (!fgets(buffer, sizeof(buffer), stdin)) break;
+    while (fgets(buffer, sizeof(buffer), stdin)) {
+    printf("Enter command (e.g. ADD OXYGEN 5): ");
+
+    buffer[strcspn(buffer, "\n")] = 0;
         send(sockfd, buffer, strlen(buffer), 0);
 
         memset(buffer, 0, BUF_SIZE);
