@@ -7,7 +7,6 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
-#define PORT 5555
 #define BUF_SIZE 1024
 #define MAX_ATOMS 1000000000000000000ULL  // 10^18
 
@@ -49,7 +48,13 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
     send(client_fd, msg, strlen(msg), 0);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        exit(1);
+    }
+
+    int port = atoi(argv[1]);
     int server_fd;
     struct sockaddr_in address;
     char buffer[BUF_SIZE];
@@ -64,7 +69,7 @@ int main() {
     }
 
     address.sin_family = AF_INET;
-    address.sin_port = htons(PORT);
+    address.sin_port = htons(port);
     address.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
@@ -73,7 +78,7 @@ int main() {
     }
 
     listen(server_fd, SOMAXCONN);
-    printf("atom warehouse server listening on port %d\n", PORT);
+    printf("atom warehouse server listening on port %d\n", port);
 
     FD_ZERO(&master_set);
     FD_SET(server_fd, &master_set);

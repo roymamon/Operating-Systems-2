@@ -6,10 +6,11 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <arpa/inet.h>
 
 #define PORT 5555
 #define BUF_SIZE 1024
-#define MAX_ATOMS 1000000000000000000ULL  // 10^18
+#define MAX_ATOMS 1000000000000000000ULL
 
 typedef struct {
     unsigned long long carbon;
@@ -21,21 +22,21 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
     char msg[BUF_SIZE];
 
     if (strcmp(atom, "CARBON") == 0) {
-        if (amount > MAX_ATOMS - inv->carbon) {
+        if (inv->carbon + amount > MAX_ATOMS) {
             snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
         }
         inv->carbon += amount;
     } else if (strcmp(atom, "HYDROGEN") == 0) {
-        if (amount > MAX_ATOMS - inv->hydrogen) {
+        if (inv->hydrogen + amount > MAX_ATOMS) {
             snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
         }
         inv->hydrogen += amount;
     } else if (strcmp(atom, "OXYGEN") == 0) {
-        if (amount > MAX_ATOMS - inv->oxygen) {
+        if (inv->oxygen + amount > MAX_ATOMS) {
             snprintf(msg, sizeof(msg), "error: exceeding storage limit.\n");
             send(client_fd, msg, strlen(msg), 0);
             return;
@@ -49,77 +50,139 @@ void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned 
     send(client_fd, msg, strlen(msg), 0);
 }
 
-int main() {
-    int server_fd;
-    struct sockaddr_in address;
-    char buffer[BUF_SIZE];
-    Inventory inv = {0};
-    fd_set master_set, read_fds;
-    int fdmax;
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
-        perror("socket");
-        exit(1);
+int can_deliver(const char* molecule, unsigned long long count, Inventory* inv) {
+    if (strcmp(molecule, "WATER") == 0) {
+        return inv->hydrogen >= 2 * count && inv->oxygen >= count;
+    } else if (strcmp(molecule, "CARBON_DIOXIDE") == 0) {
+        return inv->carbon >= count && inv->oxygen >= 2 * count;
+    } else if (strcmp(molecule, "GLUCOSE") == 0) {
+        return inv->carbon >= 6 * count && inv->hydrogen >= 12 * count && inv->oxygen >= 6 * count;
+    } else if (strcmp(molecule, "ALCOHOL") == 0) {
+        return inv->carbon >= 2 * count && inv->hydrogen >= 6 * count && inv->oxygen >= count;
     }
+    return 0;
+}
+
+void do_delivery(const char* molecule, unsigned long long count, Inventory* inv) {
+    if (strcmp(molecule, "WATER") == 0) {
+        inv->hydrogen -= 2 * count;
+        inv->oxygen -= count;
+    } else if (strcmp(molecule, "CARBON_DIOXIDE") == 0) {
+        inv->carbon -= count;
+        inv->oxygen -= 2 * count;
+    } else if (strcmp(molecule, "GLUCOSE") == 0) {
+        inv->carbon -= 6 * count;
+        inv->hydrogen -= 12 * count;
+        inv->oxygen -= 6 * count;
+    } else if (strcmp(molecule, "ALCOHOL") == 0) {
+        inv->carbon -= 2 * count;
+        inv->hydrogen -= 6 * count;
+        inv->oxygen -= count;
+    }
+}
+
+int main() {
+    int tcp_fd, udp_fd, fdmax;
+    struct sockaddr_in address, udp_addr;
+    fd_set master_set, read_fds;
+    Inventory inv = {0};
+    char buffer[BUF_SIZE];
+
+    // TCP setup
+    tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_fd < 0) { perror("tcp socket"); exit(1); }
+
+    int opt = 1;
+    setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     address.sin_family = AF_INET;
     address.sin_port = htons(PORT);
     address.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        perror("bind");
-        exit(1);
+    if (bind(tcp_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        perror("tcp bind"); exit(1);
     }
 
-    listen(server_fd, SOMAXCONN);
-    printf("atom warehouse server listening on port %d\n", PORT);
+    listen(tcp_fd, SOMAXCONN);
+
+    // UDP setup
+    udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp_fd < 0) { perror("udp socket"); exit(1); }
+
+    if (bind(udp_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        perror("udp bind"); exit(1);
+    }
 
     FD_ZERO(&master_set);
-    FD_SET(server_fd, &master_set);
-    fdmax = server_fd;
+    FD_SET(tcp_fd, &master_set);
+    FD_SET(udp_fd, &master_set);
+    fdmax = tcp_fd > udp_fd ? tcp_fd : udp_fd;
+
+    printf("molecule_supplier running on port %d\n", PORT);
 
     while (1) {
         read_fds = master_set;
-        if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
-            perror("select");
-            exit(1);
+        if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) < 0) {
+            perror("select"); exit(1);
         }
 
         for (int i = 0; i <= fdmax; ++i) {
             if (FD_ISSET(i, &read_fds)) {
-                if (i == server_fd) {
+                if (i == tcp_fd) {
+                    // New TCP connection
                     socklen_t addrlen = sizeof(address);
-                    int new_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-                    if (new_fd == -1) {
-                        perror("accept");
-                    } else {
-                        FD_SET(new_fd, &master_set);
-                        if (new_fd > fdmax) fdmax = new_fd;
-                        printf("new client connected.\n");
+                    int client_fd = accept(tcp_fd, (struct sockaddr*)&address, &addrlen);
+                    if (client_fd >= 0) {
+                        FD_SET(client_fd, &master_set);
+                        if (client_fd > fdmax) fdmax = client_fd;
+                        printf("atom_supplier connected\n");
+                    }
+                } else if (i == udp_fd) {
+                    // UDP request
+                    socklen_t addrlen = sizeof(udp_addr);
+                    ssize_t len = recvfrom(udp_fd, buffer, BUF_SIZE - 1, 0,
+                                           (struct sockaddr*)&udp_addr, &addrlen);
+                    if (len > 0) {
+                        buffer[len] = 0;
+                        char cmd[16], mol[32];
+                        unsigned long long n;
+                        if (sscanf(buffer, "%15s %31s %llu", cmd, mol, &n) == 3 && strcmp(cmd, "DELIVER") == 0) {
+                            if (can_deliver(mol, n, &inv)) {
+                                do_delivery(mol, n, &inv);
+                                sendto(udp_fd, "DELIVERED\n", 10, 0,
+                                       (struct sockaddr*)&udp_addr, addrlen);
+                            } else {
+                                sendto(udp_fd, "FAILURE\n", 8, 0,
+                                       (struct sockaddr*)&udp_addr, addrlen);
+                            }
+                        } else {
+                            sendto(udp_fd, "INVALID REQUEST\n", 17, 0,
+                                   (struct sockaddr*)&udp_addr, addrlen);
+                        }
                     }
                 } else {
-                    memset(buffer, 0, BUF_SIZE);
+                    // TCP command from atom_supplier
                     ssize_t len = recv(i, buffer, BUF_SIZE - 1, 0);
                     if (len <= 0) {
                         close(i);
                         FD_CLR(i, &master_set);
-                        printf("client disconnected.\n");
+                        continue;
+                    }
+                    buffer[len] = 0;
+                    char cmd[16], atom[16];
+                    unsigned long long amount;
+                    if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
+                        update_inventory(i, &inv, atom, amount);
                     } else {
-                        char cmd[16], atom[16];
-                        unsigned long long amount;
-                        if (sscanf(buffer, "%15s %15s %llu", cmd, atom, &amount) == 3 && strcmp(cmd, "ADD") == 0) {
-                            update_inventory(i, &inv, atom, amount);
-                        } else {
-                            char* err = "invalid command. Use: ADD ATOM_NAME AMOUNT\n";
-                            send(i, err, strlen(err), 0);
-                        }
+                        char* err = "invalid command. Use: ADD ATOM_NAME AMOUNT\n";
+                        send(i, err, strlen(err), 0);
                     }
                 }
             }
         }
     }
 
-    close(server_fd);
+    close(tcp_fd);
+    close(udp_fd);
     return 0;
 }
