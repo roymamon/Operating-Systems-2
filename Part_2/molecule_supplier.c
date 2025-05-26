@@ -82,7 +82,7 @@ void do_delivery(const char* molecule, unsigned long long count, Inventory* inv)
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <tcp_port> <udp_port>\n", argv[0]);
+        fprintf(stderr, "usage: %s <tcp_port> <udp_port>\n", argv[0]);
         exit(1);
     }
 
