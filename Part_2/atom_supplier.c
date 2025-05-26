@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("connected to atom warehouse.\n");
+    printf("connected to molecule supplier.\n");
 
     printf("enter command (example: ADD OXYGEN 5), or -1 to quit: ");
     while (fgets(buffer, sizeof(buffer), stdin)) {
