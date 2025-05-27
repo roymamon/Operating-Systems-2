@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <arpa/inet.h>
+#include <getopt.h>
+#include <errno.h>
 
 #define BUF_SIZE 1024
 #define MAX_ATOMS 1000000000000000000ULL
@@ -87,37 +89,63 @@ void handle_keyboard(Inventory* inv, const char* line) {
     unsigned long long result = 0;
 
     if (strcmp(line, "SOFT DRINK") == 0) {
-    result = inv->carbon / 7;
-    result = min(result, inv->hydrogen / 14);
-    result = min(result, inv->oxygen / 9);
-} else if (strcmp(line, "VODKA") == 0) {
-    result = inv->carbon / 8;
-    result = min(result, inv->hydrogen / 20);
-    result = min(result, inv->oxygen / 8);
-} else if (strcmp(line, "CHAMPAGNE") == 0) {
-    result = inv->carbon / 3;
-    result = min(result, inv->hydrogen / 8);
-    result = min(result, inv->oxygen / 4);
-}
+        result = inv->carbon / 7;
+        result = min(result, inv->hydrogen / 14);
+        result = min(result, inv->oxygen / 9);
+    } else if (strcmp(line, "VODKA") == 0) {
+        result = inv->carbon / 8;
+        result = min(result, inv->hydrogen / 20);
+        result = min(result, inv->oxygen / 8);
+    } else if (strcmp(line, "CHAMPAGNE") == 0) {
+        result = inv->carbon / 3;
+        result = min(result, inv->hydrogen / 8);
+        result = min(result, inv->oxygen / 4);
+    }
 
     printf("can produce %llu of %s\n", result, line);
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <tcp_port> <udp_port>\n", argv[0]);
-        exit(1);
+    int tcp_port = -1, udp_port = -1;
+    int timeout = -1;
+    Inventory inv = {0};
+
+    struct option long_opts[] = {
+        {"oxygen", required_argument, NULL, 'o'},
+        {"carbon", required_argument, NULL, 'c'},
+        {"hydrogen", required_argument, NULL, 'h'},
+        {"timeout", required_argument, NULL, 't'},
+        {"tcp-port", required_argument, NULL, 'T'},
+        {"udp-port", required_argument, NULL, 'U'},
+        {NULL, 0, NULL, 0}
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "o:c:h:t:T:U:", long_opts, NULL)) != -1) {
+        switch (opt) {
+            case 'o': inv.oxygen = strtoull(optarg, NULL, 10); break;
+            case 'c': inv.carbon = strtoull(optarg, NULL, 10); break;
+            case 'h': inv.hydrogen = strtoull(optarg, NULL, 10); break;
+            case 't': timeout = atoi(optarg); break;
+            case 'T': tcp_port = atoi(optarg); break;
+            case 'U': udp_port = atoi(optarg); break;
+            default:
+                fprintf(stderr, "Usage: %s -T <tcp_port> -U <udp_port> [--oxygen N] [--carbon N] [--hydrogen N] [--timeout N]\n", argv[0]);
+                exit(1);
+        }
     }
 
-    int tcp_port = atoi(argv[1]);
-    int udp_port = atoi(argv[2]);
+    if (tcp_port <= 0 || udp_port <= 0) {
+        fprintf(stderr, "Error: both --tcp-port and --udp-port must be specified.\n");
+        exit(1);
+    }
 
     int tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (tcp_fd < 0 || udp_fd < 0) { perror("socket"); exit(1); }
 
-    int opt = 1;
-    setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int optval = 1;
+    setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
     struct sockaddr_in tcp_addr = {.sin_family = AF_INET, .sin_port = htons(tcp_port), .sin_addr.s_addr = INADDR_ANY};
     struct sockaddr_in udp_addr = {.sin_family = AF_INET, .sin_port = htons(udp_port), .sin_addr.s_addr = INADDR_ANY};
@@ -135,12 +163,23 @@ int main(int argc, char* argv[]) {
     FD_SET(STDIN_FILENO, &master_set);
     int fdmax = tcp_fd > udp_fd ? tcp_fd : udp_fd;
 
-    Inventory inv = {0};
     char buffer[BUF_SIZE];
 
     while (1) {
         read_fds = master_set;
-        if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) < 0) { perror("select"); exit(1); }
+        struct timeval tv = {0};
+        struct timeval* ptv = NULL;
+        if (timeout > 0) {
+            tv.tv_sec = timeout;
+            ptv = &tv;
+        }
+
+        int activity = select(fdmax + 1, &read_fds, NULL, NULL, ptv);
+        if (activity < 0) { perror("select"); exit(1); }
+        if (activity == 0) {
+            printf("Timeout reached. Shutting down.\n");
+            break;
+        }
 
         for (int i = 0; i <= fdmax; i++) {
             if (!FD_ISSET(i, &read_fds)) continue;
@@ -162,7 +201,7 @@ int main(int argc, char* argv[]) {
                     unsigned long long count;
                     if (sscanf(buffer, "%15s %31s %llu", cmd, mol, &count) == 3 && strcmp(cmd, "DELIVER") == 0) {
                         if (can_deliver(mol, count, &inv)) {
-                            do_delivery(mol, n, &inv);
+                            do_delivery(mol, count, &inv);
                             sendto(udp_fd, "DELIVERED\n", 10, 0, (struct sockaddr*)&udp_addr, len);
                         } else {
                             sendto(udp_fd, "FAILURE\n", 8, 0, (struct sockaddr*)&udp_addr, len);
@@ -195,4 +234,8 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    close(tcp_fd);
+    close(udp_fd);
+    return 0;
 }
