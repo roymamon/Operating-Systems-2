@@ -2,60 +2,65 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 #define BUF_SIZE 1024
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <server_ip> <port>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <server_host> <port>\n", argv[0]);
         exit(1);
     }
 
-    const char *server_ip = argv[1];
-    int port = atoi(argv[2]);
-
+    const char *server_host = argv[1];
+    const char *port_str = argv[2];
     int sockfd;
-    struct sockaddr_in server_addr;
+    struct addrinfo hints, *res, *rp;
     char buffer[BUF_SIZE];
 
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("socket");
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    int err = getaddrinfo(server_host, port_str, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
         exit(1);
     }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = inet_addr(server_ip);
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sockfd != -1) break;
+    }
 
-    printf("Connected to molecule supplier.");
-    printf("\nEnter command (example: DELIVER WATER 3), or -1 to quit: ");
+    if (rp == NULL) {
+        fprintf(stderr, "Could not create socket\n");
+        freeaddrinfo(res);
+        exit(1);
+    }
+
+    printf("Connected to molecule supplier.\n");
+    printf("Enter command (example: DELIVER WATER 3), or -1 to quit: ");
 
     while (fgets(buffer, sizeof(buffer), stdin)) {
-        if (strcmp(buffer, "-1\n") == 0) {
-            printf("Exiting.\n");
-            break;
-        }
+        if (strcmp(buffer, "-1\n") == 0) break;
 
-        sendto(sockfd, buffer, strlen(buffer), 0,
-               (struct sockaddr *)&server_addr, sizeof(server_addr));
+        sendto(sockfd, buffer, strlen(buffer), 0, rp->ai_addr, rp->ai_addrlen);
 
         memset(buffer, 0, BUF_SIZE);
-        socklen_t addrlen = sizeof(server_addr);
-        ssize_t len = recvfrom(sockfd, buffer, BUF_SIZE - 1, 0,
-                               (struct sockaddr *)&server_addr, &addrlen);
+        socklen_t addrlen = rp->ai_addrlen;
+        ssize_t len = recvfrom(sockfd, buffer, BUF_SIZE - 1, 0, rp->ai_addr, &addrlen);
         if (len > 0) {
             buffer[len] = 0;
             printf("Server: %s", buffer);
         }
 
-        if (!feof(stdin)) {
-            printf("Enter command (example: DELIVER WATER 3), or -1 to quit: ");
-        }
+        if (!feof(stdin)) printf("Enter command (example: DELIVER WATER 3), or -1 to quit: ");
     }
 
+    freeaddrinfo(res);
     close(sockfd);
     return 0;
 }
