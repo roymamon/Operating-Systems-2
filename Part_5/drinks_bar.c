@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <getopt.h>
 #include <errno.h>
+#include <sys/un.h>
 
 #define BUF_SIZE 1024
 #define MAX_ATOMS 1000000000000000000ULL
@@ -18,6 +19,10 @@ typedef struct {
     unsigned long long hydrogen;
     unsigned long long oxygen;
 } Inventory;
+
+unsigned long long min(unsigned long long a, unsigned long long b) {
+    return a < b ? a : b;
+}
 
 void update_inventory(int client_fd, Inventory* inv, const char* atom, unsigned long long amount) {
     char msg[BUF_SIZE];
@@ -79,10 +84,6 @@ void do_delivery(const char* molecule, unsigned long long count, Inventory* inv)
     }
 }
 
-unsigned long long min(unsigned long long a, unsigned long long b) {
-    return a < b ? a : b;
-}
-
 void handle_keyboard(Inventory* inv, const char* line) {
     if (strncmp(line, "GEN ", 4) != 0) return;
     line += 4;
@@ -106,8 +107,8 @@ void handle_keyboard(Inventory* inv, const char* line) {
 }
 
 int main(int argc, char* argv[]) {
-    int tcp_port = -1, udp_port = -1;
-    int timeout = -1;
+    int tcp_port = -1, udp_port = -1, timeout = -1;
+    char *stream_path = NULL, *dgram_path = NULL;
     Inventory inv = {0};
 
     struct option long_opts[] = {
@@ -117,11 +118,13 @@ int main(int argc, char* argv[]) {
         {"timeout", required_argument, NULL, 't'},
         {"tcp-port", required_argument, NULL, 'T'},
         {"udp-port", required_argument, NULL, 'U'},
+        {"stream-path", required_argument, NULL, 's'},
+        {"datagram-path", required_argument, NULL, 'd'},
         {NULL, 0, NULL, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "o:c:h:t:T:U:", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:c:h:t:T:U:s:d:", long_opts, NULL)) != -1) {
         switch (opt) {
             case 'o': inv.oxygen = strtoull(optarg, NULL, 10); break;
             case 'c': inv.carbon = strtoull(optarg, NULL, 10); break;
@@ -129,8 +132,10 @@ int main(int argc, char* argv[]) {
             case 't': timeout = atoi(optarg); break;
             case 'T': tcp_port = atoi(optarg); break;
             case 'U': udp_port = atoi(optarg); break;
+            case 's': stream_path = optarg; break;
+            case 'd': dgram_path = optarg; break;
             default:
-                fprintf(stderr, "Usage: %s -T <tcp_port> -U <udp_port> [--oxygen N] [--carbon N] [--hydrogen N] [--timeout N]\n", argv[0]);
+                fprintf(stderr, "Usage: %s -T <tcp_port> -U <udp_port> [--oxygen N] [--carbon N] [--hydrogen N] [--timeout N] [--stream-path PATH] [--datagram-path PATH]\n", argv[0]);
                 exit(1);
         }
     }
@@ -142,6 +147,8 @@ int main(int argc, char* argv[]) {
 
     int tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int stream_fd = -1, dgram_fd = -1;
+
     if (tcp_fd < 0 || udp_fd < 0) { perror("socket"); exit(1); }
 
     int optval = 1;
@@ -154,14 +161,36 @@ int main(int argc, char* argv[]) {
     listen(tcp_fd, SOMAXCONN);
     bind(udp_fd, (struct sockaddr*)&udp_addr, sizeof(udp_addr));
 
-    printf("drinks_bar running (TCP: %d, UDP: %d)\n", tcp_port, udp_port);
+    struct sockaddr_un stream_addr, dgram_addr;
+    if (stream_path) {
+        stream_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        stream_addr.sun_family = AF_UNIX;
+        strncpy(stream_addr.sun_path, stream_path, sizeof(stream_addr.sun_path) - 1);
+        unlink(stream_path);
+        bind(stream_fd, (struct sockaddr*)&stream_addr, sizeof(stream_addr));
+        listen(stream_fd, SOMAXCONN);
+    }
+
+    if (dgram_path) {
+        dgram_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+        dgram_addr.sun_family = AF_UNIX;
+        strncpy(dgram_addr.sun_path, dgram_path, sizeof(dgram_addr.sun_path) - 1);
+        unlink(dgram_path);
+        bind(dgram_fd, (struct sockaddr*)&dgram_addr, sizeof(dgram_addr));
+    }
 
     fd_set master_set, read_fds;
     FD_ZERO(&master_set);
     FD_SET(tcp_fd, &master_set);
     FD_SET(udp_fd, &master_set);
     FD_SET(STDIN_FILENO, &master_set);
+    if (stream_fd != -1) FD_SET(stream_fd, &master_set);
+    if (dgram_fd != -1) FD_SET(dgram_fd, &master_set);
     int fdmax = tcp_fd > udp_fd ? tcp_fd : udp_fd;
+    if (stream_fd > fdmax) fdmax = stream_fd;
+    if (dgram_fd > fdmax) fdmax = dgram_fd;
+
+    printf("drinks_bar running\n");
 
     char buffer[BUF_SIZE];
 
@@ -184,17 +213,17 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i <= fdmax; i++) {
             if (!FD_ISSET(i, &read_fds)) continue;
 
-            if (i == tcp_fd) {
-                socklen_t len = sizeof(tcp_addr);
-                int client_fd = accept(tcp_fd, (struct sockaddr*)&tcp_addr, &len);
+            if (i == tcp_fd || (stream_fd != -1 && i == stream_fd)) {
+                int client_fd = accept(i, NULL, NULL);
                 if (client_fd >= 0) {
                     FD_SET(client_fd, &master_set);
                     if (client_fd > fdmax) fdmax = client_fd;
-                    printf("atom_supplier connected\n");
+                    printf("client connected\n");
                 }
-            } else if (i == udp_fd) {
-                socklen_t len = sizeof(udp_addr);
-                ssize_t n = recvfrom(udp_fd, buffer, BUF_SIZE - 1, 0, (struct sockaddr*)&udp_addr, &len);
+            } else if (i == udp_fd || (dgram_fd != -1 && i == dgram_fd)) {
+                struct sockaddr_storage client;
+                socklen_t len = sizeof(client);
+                ssize_t n = recvfrom(i, buffer, BUF_SIZE - 1, 0, (struct sockaddr*)&client, &len);
                 if (n > 0) {
                     buffer[n] = 0;
                     char cmd[16], mol[32];
@@ -202,12 +231,12 @@ int main(int argc, char* argv[]) {
                     if (sscanf(buffer, "%15s %31s %llu", cmd, mol, &count) == 3 && strcmp(cmd, "DELIVER") == 0) {
                         if (can_deliver(mol, count, &inv)) {
                             do_delivery(mol, count, &inv);
-                            sendto(udp_fd, "DELIVERED\n", 10, 0, (struct sockaddr*)&udp_addr, len);
+                            sendto(i, "DELIVERED\n", 10, 0, (struct sockaddr*)&client, len);
                         } else {
-                            sendto(udp_fd, "FAILURE\n", 8, 0, (struct sockaddr*)&udp_addr, len);
+                            sendto(i, "FAILURE\n", 8, 0, (struct sockaddr*)&client, len);
                         }
                     } else {
-                        sendto(udp_fd, "INVALID REQUEST\n", 17, 0, (struct sockaddr*)&udp_addr, len);
+                        sendto(i, "INVALID REQUEST\n", 17, 0, (struct sockaddr*)&client, len);
                     }
                 }
             } else if (i == STDIN_FILENO) {
@@ -237,5 +266,7 @@ int main(int argc, char* argv[]) {
 
     close(tcp_fd);
     close(udp_fd);
+    if (stream_fd != -1) { close(stream_fd); unlink(stream_path); }
+    if (dgram_fd != -1) { close(dgram_fd); unlink(dgram_path); }
     return 0;
 }
