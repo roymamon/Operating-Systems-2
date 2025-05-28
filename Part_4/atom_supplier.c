@@ -2,15 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <getopt.h>
 
 #define BUF_SIZE 1024
 
 int main(int argc, char *argv[]) {
     char *host = NULL;
-    int port = -1;
+    char port_str[16] = {0};
 
     struct option long_options[] = {
         {"host", required_argument, 0, 'h'},
@@ -22,34 +23,43 @@ int main(int argc, char *argv[]) {
     while ((opt = getopt_long(argc, argv, "h:p:", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h': host = optarg; break;
-            case 'p': port = atoi(optarg); break;
+            case 'p': strncpy(port_str, optarg, sizeof(port_str) - 1); break;
             default:
                 fprintf(stderr, "Usage: %s -h <host> -p <port>\n", argv[0]);
                 exit(1);
         }
     }
 
-    if (!host || port == -1) {
+    if (!host || port_str[0] == '\0') {
         fprintf(stderr, "Error: --host and --port are required.\n");
         exit(1);
     }
 
+    struct addrinfo hints, *res, *rp;
     int sockfd;
-    struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        perror("socket");
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; // IPv4
+    hints.ai_socktype = SOCK_STREAM; // TCP
+
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
         exit(1);
     }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = inet_addr(host);
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sockfd == -1) continue;
+        if (connect(sockfd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(sockfd);
+    }
 
-    if (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("connect");
+    freeaddrinfo(res);
+
+    if (rp == NULL) {
+        fprintf(stderr, "Could not connect to %s:%s\n", host, port_str);
         exit(1);
     }
 
@@ -63,10 +73,12 @@ int main(int argc, char *argv[]) {
         }
 
         send(sockfd, buffer, strlen(buffer), 0);
-
         memset(buffer, 0, BUF_SIZE);
-        recv(sockfd, buffer, BUF_SIZE - 1, 0);
-        printf("server: %s", buffer);
+        ssize_t len = recv(sockfd, buffer, BUF_SIZE - 1, 0);
+        if (len > 0) {
+            buffer[len] = 0;
+            printf("server: %s", buffer);
+        }
 
         if (!feof(stdin)) {
             printf("enter command (example: ADD OXYGEN 5), or -1 to quit: ");

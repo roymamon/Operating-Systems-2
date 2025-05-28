@@ -2,15 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <getopt.h>
 
 #define BUF_SIZE 1024
 
 int main(int argc, char *argv[]) {
-    const char *server_ip = NULL;
-    int port = -1;
+    const char *host = NULL;
+    char port_str[16] = {0};
 
     struct option long_options[] = {
         {"host", required_argument, 0, 'h'},
@@ -21,31 +22,45 @@ int main(int argc, char *argv[]) {
     int opt;
     while ((opt = getopt_long(argc, argv, "h:p:", long_options, NULL)) != -1) {
         switch (opt) {
-            case 'h': server_ip = optarg; break;
-            case 'p': port = atoi(optarg); break;
+            case 'h': host = optarg; break;
+            case 'p': strncpy(port_str, optarg, sizeof(port_str) - 1); break;
             default:
                 fprintf(stderr, "Usage: %s -h <host> -p <port>\n", argv[0]);
                 exit(1);
         }
     }
 
-    if (!server_ip || port == -1) {
+    if (!host || port_str[0] == '\0') {
         fprintf(stderr, "Error: both --host and --port must be provided.\n");
         exit(1);
     }
 
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("socket");
+    struct addrinfo hints, *res, *rp;
+    int sockfd;
+    char buffer[BUF_SIZE];
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;         // IPv4
+    hints.ai_socktype = SOCK_DGRAM;    // UDP
+
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
         exit(1);
     }
 
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = inet_addr(server_ip);
+    // Try available results
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sockfd != -1)
+            break;
+    }
 
-    char buffer[BUF_SIZE];
+    if (rp == NULL) {
+        fprintf(stderr, "Failed to create socket for %s:%s\n", host, port_str);
+        freeaddrinfo(res);
+        exit(1);
+    }
 
     printf("Connected to drinks bar.\n");
     printf("Enter command (example: DELIVER WATER 3), or -1 to quit: ");
@@ -57,12 +72,10 @@ int main(int argc, char *argv[]) {
         }
 
         sendto(sockfd, buffer, strlen(buffer), 0,
-               (struct sockaddr *)&server_addr, sizeof(server_addr));
+               rp->ai_addr, rp->ai_addrlen);
 
         memset(buffer, 0, BUF_SIZE);
-        socklen_t addrlen = sizeof(server_addr);
-        ssize_t len = recvfrom(sockfd, buffer, BUF_SIZE - 1, 0,
-                               (struct sockaddr *)&server_addr, &addrlen);
+        ssize_t len = recvfrom(sockfd, buffer, BUF_SIZE - 1, 0, NULL, NULL);
         if (len > 0) {
             buffer[len] = 0;
             printf("Server: %s", buffer);
@@ -73,6 +86,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    freeaddrinfo(res);
     close(sockfd);
     return 0;
 }
